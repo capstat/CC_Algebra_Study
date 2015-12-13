@@ -1,0 +1,220 @@
+---
+title: "Common Core Algebra"
+author: "Nicholas Capofari"
+date: "December 9, 2015"
+output: 
+  html_document:
+    toc: true
+---
+
+###Student Scores
+
+The purpose of this project is to explore the Algebra Common Core Regents.  A replication of the type of output schools receive after the the test's administration has been created.  This output is a .csv file with student information, their answer to each multiple choice question, the amount of points they earned for each free response question, their raw score on the test and their scaled score.  To begin our exploration, we must first remove any extraneous information and perform data clean up.  
+
+Here is a look at the original data:
+
+```{r}
+library(stringr)
+mxrc <- read.csv("sample_alg_scores.csv",stringsAsFactors = FALSE)
+head(mxrc)
+```
+
+```{r}
+suppressMessages(library(dplyr))
+#get rid of useless columns and rows
+mxrc <- mxrc[-c(1:4),-c(4:13,51:55)]
+#remove abs students (detect a numeric score 0-100 if they are present)
+present <- str_detect(mxrc$X.6, "\\d")
+mxrc <- filter(mxrc, present)
+#rename columns
+colnames(mxrc) <- c("id","raw","final",c(1:37))
+#move questions to front so that question# = column#
+mxrc <- mxrc[,c(4:40,1:3)]
+mxrc$mc <- rowSums(sapply(mxrc[,1:24], str_count, "-"))
+mxrc$final <- as.numeric(mxrc$final)
+mxrc$raw <- as.numeric(mxrc$raw)
+```
+
+Here is the cleaned up data:
+
+```{r}
+head(mxrc)
+```
+
+###Concept Evaluation
+
+The Common Core Algebra Curriculum is broken up into separate concepts.  The above scores have been generated for the January 2015 Regents.  Let us take a look at the concept breakdown for this specific Regents exam.
+
+```{r}
+#use the file I created to make the shiny ap
+#this is a df of all questions and their attributes
+source('algebra_df.R', local=TRUE)
+#create a new data frame that combines the questions by concept
+concept_df <- algebra_df %>% 
+  filter(test_name == "January_2015") %>% 
+  arrange(question) %>%
+  group_by(concept) %>%
+  #add number of questions and possible points for each concept
+  mutate(questions = length(question), total_points = sum(points)) %>%
+  #focus in on the multiple choice questions
+  filter(question < 25) %>%
+  mutate(mc_questions = length(question), 
+         mc_points = sum(points)) %>%
+  #free response
+  mutate(fr_questions = questions-mc_questions, 
+         fr_points = total_points-mc_points) %>%
+  #keep concept and new data
+  select(concept, 13:18) %>%
+  distinct(concept) 
+#not long so we can see data as table
+concept_df
+```
+
+```{r}
+library(ggplot2)
+#create long data
+concept_df <- concept_df %>% gather(type, total, 2:7)
+p <- ggplot(data=concept_df, aes(type, total, fill=concept))
+p <- p + geom_bar(stat="identity", position="dodge")
+p <- p + theme(axis.text.x = element_text(angle=75, hjust=1, vjust=1))
+p <- p + xlab("") + ylab("Total")
+p <- p + ggtitle("January 2015 Common Core Algebra Regents")
+p <- p + scale_x_discrete(labels=c("Questions","Total\nPoints",
+                                   "Multiple Choice\nQuestions",
+                                   "Multiple Choice\nPoints",
+                                   "Free Response\nQuestions",
+                                   "Free Response\nPoints"))
+p
+```
+
+###Response By Concept
+
+Now that we know the test breakdown, it would be helpful for schools to see which concepts need to receive more focus while preparing for the next administration.
+
+```{r}
+#this function takes a concept and returns the proportion 
+#of mc right and prop of possible fr points earned
+concept_breakdown <- function(c){
+  concept <- algebra_df %>% arrange(question) %>% 
+  filter(month=="January", 
+         year==15,
+         concept==c) %>%
+    select(question)
+  mc_q <- concept$question[concept$question < 25]
+  concept_mc <- sum(str_count(mxrc[,mc_q],"-"))/(nrow(mxrc) * length(mc_q))
+  fr_q <- concept$question[concept$question > 24]
+  fr_points <- sum(algebra_df %>% filter(month=="January",
+                                         year==15,
+                                         question %in% fr_q) %>%
+                     select(points))
+  concept_fr <- sum(sapply(mxrc[,fr_q], as.numeric))/(nrow(mxrc) * fr_points)
+  return(c(c, concept_mc, concept_fr))
+}
+
+#creata a data frame to displaythe information
+concept_bd_df <- data_frame("Concept"=NA, "MC_Right"=NA, "FR_Points"=NA)
+for(i in unique(concept_df$concept)){
+  concept_bd_df <- rbind(concept_bd_df, concept_breakdown(i))
+}
+concept_bd_df <- concept_bd_df[-1,]
+```
+
+```{r}
+library(scales)
+#create long data
+concept_bd_df <- concept_bd_df %>% gather(type, total, 2:3)
+#remove factor
+concept_bd_df$total <- as.numeric(as.character(concept_bd_df$total))
+p1 <- ggplot(data=concept_bd_df, aes(Concept, total, fill=type))
+p1 <- p1 + geom_bar(stat="identity", position="dodge")
+p1 <- p1 + theme(axis.text.x = element_text(angle=75, hjust=1, vjust=1))
+p1 <- p1 + xlab("") + ylab("Percent")
+p1 <- p1 + scale_y_continuous(limits=c(0, .5), labels=percent)
+p1 <- p1 + ggtitle("January 2015 Concept Breakdown")
+p1
+```
+
+###Is Multiple Choice Enough?
+
+A few years ago the NYC DOE changed the way the Regents exams are scored.  Previously they were scored in house at the school.  Due to a large amount of 65s (the passing score) showing up the city decided to use a centralized scoring system.  This means that after each test, the multiple choice answers are scanned and the free response answers are shipped to a central scoring site.  
+
+Teachers are then paid overtime to go to the central sites and score the exams on nights and weekends.  It always seem to me that this is all a colossal waste of money.  I understand not scoring in house, but there should be a better system.  For example, the first day of scoring is always spent waiting for the boxes of tests to arrive at the central scoring site.  
+
+Could the test just be multiple choice?  Is the free response section essential to finding out which students really know the material?  The SAT free response section is still bubbled, so couldn't the Regents use the same process?  
+
+```{r}
+q <- ggplot(mxrc, aes(mxrc$mc, as.numeric(mxrc$final)))
+q <- q + geom_point()
+q <- q + geom_abline(aes(slope=0, intercept=64.5, color="red"))
+q <- q + xlab("Multiple Choice Correct") + ylab("Final Score")
+q <- q + ggtitle("January 2014 Common Core Algebra Regents")
+q <- q + ylim(0,100)
+q
+
+mc <- data.frame(table(mxrc$mc > 12, mxrc$final >= 65))
+mc <- arrange(mc, desc(Var1), desc(Var2))
+colnames(mc) <- c("Pass the Regents","More than Half MC Correct","Total")
+mc
+```
+
+There were only ```r mc$Total[3]``` students who got more than half the multiple choice right and did **not** pass the exam.  That is only ```r percent(mc$Total[3]/sum(mc$Total))``` of all the students who took the test.  Now, let us raise the bar and focus on students who got at least 62.5% of the multiple choice questions right.
+
+```{r}
+mc <- data.frame(table(mxrc$mc >= 15, mxrc$final >= 65))
+mc <- arrange(mc, desc(Var1), desc(Var2))
+colnames(mc) <- c("Pass the Regents","At Least 62.5% MC Correct","Total")
+mc
+```
+
+If a student gets at least 15 multiple choice questions correct, they will pass the Regents.
+
+###Modeling the Curve
+
+Now I will use my rudimentary statistical analysis skills to find the relationship between the number of multiple choice questions right and a student's final test score.  
+
+```{r}
+x <- lm(final ~ log(mc), data=mxrc)
+summary(x) 
+
+q <- q + geom_smooth(method="lm", formula=y~log(x))
+q
+```
+
+There is a statistically significant relationship between a student's final score and the number of multiple choice questions they answered correctly.  We can now use this model to assess the probability of passing the test by guessing.
+
+###Random Test Results
+
+As a geometry teacher, I always felt that my student's algebra skills were lacking.  Since a student only needs to get half of the multiple choice questions correct to pass the Algebra Regents, I shouldn't have been suprised.  Does passing this test mean anything?  Do students actually need any algebraic knowledge to pass the test?  What if they just guessed on the multiple choice (leaving the free response blank), could they still pass?  
+
+I will generate 100,000 random multiple choice test responses and use the model to see if the student would pass the test.
+
+```{r}
+ans_key <- c(algebra_df %>% filter(month=="January", year==15, question < 25) %>% 
+  arrange(question) %>% select(answer))
+r_mc <- c()
+runs <- 100000
+for(i in 1:runs){
+  comp <- data_frame(random_answers = sample(1:4, 24, replace = T),
+                     key = unlist(ans_key))
+  comp$check <- comp$random_answers == comp$key
+  r_mc <- c(r_mc, sum(comp$check))
+}
+pred_values <- data_frame(r_mc=c(r_mc))
+pred_values <- mutate(pred_values, final=-5.0972+27.4704*log(r_mc))
+pred_values$final <- replace(pred_values$final, pred_values$final < 0, 0) 
+summary(pred_values)
+```
+
+```{r}
+pv <- distinct(pred_values)
+r <- ggplot(pv, aes(r_mc, final))
+r <- r + geom_point()
+r <- r + geom_abline(aes(slope=0, intercept=64.5, color="red"))
+r <- r + xlab("Random Multiple Choice Correct") + ylab("Predicted Final Score")
+r <- r + ggtitle("Random Algebra Regents Scores")
+r <- r + ylim(0,100)
+r
+```
+
+####The probability of passing the test by guessing is ```r percent(sum(pred_values$r_mc >= 13)/runs)```.  So students should do a little bit of studying prior to the test if they expect to be successful!
+
